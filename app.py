@@ -2,17 +2,19 @@
 COVID-Era Earnings Manipulation Analysis
 Streamlit Application for Difference-in-Differences Analysis
 """
+
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
 import plotly.express as px
-from plotly.subplots import make_subplots
-import statsmodels.formula.api as smf
-from scipy import stats
-from datetime import datetime
-import io
-import base64
+import plotly.graph_objects as go
+try:
+    import statsmodels.formula.api as smf
+    import scipy.stats as stats
+    STATSMODELS_AVAILABLE = True
+except ImportError:
+    STATSMODELS_AVAILABLE = False
+    st.warning("Some statistical features disabled")
 
 # Page Configuration
 st.set_page_config(
