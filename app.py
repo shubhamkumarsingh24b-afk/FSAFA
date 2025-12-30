@@ -1,20 +1,25 @@
 """
 COVID-Era Earnings Manipulation Analysis
-Streamlit Application for Difference-in-Differences Analysis
+Streamlit Application - Compatible with Streamlit Cloud Python 3.13
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.express as px
 import plotly.graph_objects as go
+import plotly.express as px
+from datetime import datetime
+import io
+import base64
+
+# Try to import stats libraries (handle gracefully if not available)
 try:
     import statsmodels.formula.api as smf
     import scipy.stats as stats
-    STATSMODELS_AVAILABLE = True
+    STATS_AVAILABLE = True
 except ImportError:
-    STATSMODELS_AVAILABLE = False
-    st.warning("Some statistical features disabled")
+    STATS_AVAILABLE = False
+    st.warning("Note: Some statistical features require statsmodels and scipy")
 
 # Page Configuration
 st.set_page_config(
@@ -24,30 +29,48 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for better styling
+# Custom CSS
 st.markdown("""
 <style>
     .main-header {
-        font-size: 2.8rem;
+        font-size: 2.5rem;
         color: #1E3A8A;
         text-align: center;
         margin-bottom: 1rem;
         padding-bottom: 0.5rem;
         border-bottom: 3px solid #3B82F6;
     }
-    .sub-header {
-        color: #374151;
-        font-size: 1.4rem;
-        margin-bottom: 2rem;
-        text-align: center;
-    }
     .metric-card {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         color: white;
-        padding: 1.5rem;
-        border-radius: 15px;
+        padding: 1rem;
+        border-radius: 10px;
         box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
         margin-bottom: 1rem;
+    }
+    .upload-box {
+        border: 2px dashed #4CAF50;
+        border-radius: 10px;
+        padding: 2rem;
+        text-align: center;
+        background-color: #f8fff8;
+        margin: 2rem 0;
+    }
+    .success-box {
+        background-color: #d4edda;
+        color: #155724;
+        padding: 1rem;
+        border-radius: 5px;
+        border-left: 5px solid #28a745;
+        margin: 1rem 0;
+    }
+    .info-box {
+        background-color: #d1ecf1;
+        color: #0c5460;
+        padding: 1rem;
+        border-radius: 5px;
+        border-left: 5px solid #17a2b8;
+        margin: 1rem 0;
     }
     .stTabs [data-baseweb="tab-list"] {
         gap: 2px;
@@ -65,51 +88,18 @@ st.markdown("""
         background-color: #1E3A8A;
         color: white;
     }
-    .upload-section {
-        border: 2px dashed #4CAF50;
-        border-radius: 10px;
-        padding: 2rem;
-        text-align: center;
-        background-color: #f8fff8;
-        margin: 2rem 0;
-    }
-    .success-box {
-        background-color: #d4edda;
-        color: #155724;
-        padding: 1rem;
-        border-radius: 5px;
-        border-left: 5px solid #28a745;
-        margin: 1rem 0;
-    }
-    .warning-box {
-        background-color: #fff3cd;
-        color: #856404;
-        padding: 1rem;
-        border-radius: 5px;
-        border-left: 5px solid #ffc107;
-        margin: 1rem 0;
-    }
-    .info-box {
-        background-color: #d1ecf1;
-        color: #0c5460;
-        padding: 1rem;
-        border-radius: 5px;
-        border-left: 5px solid #17a2b8;
-        margin: 1rem 0;
-    }
 </style>
 """, unsafe_allow_html=True)
 
-# Title and Header
-st.markdown('<h1 class="main-header">📊 COVID-Era Earnings Manipulation Analysis</h1>', unsafe_allow_html=True)
-st.markdown('<p class="sub-header">A Difference-in-Differences (DiD) Analysis of Financial Reporting During the Pandemic</p>', unsafe_allow_html=True)
-
-# Initialize session state for data persistence
-if 'data_loaded' not in st.session_state:
-    st.session_state.data_loaded = False
+# Initialize session state
+if 'df' not in st.session_state:
     st.session_state.df = None
+    st.session_state.data_loaded = False
     st.session_state.analysis_complete = False
-    st.session_state.did_results = None
+
+# Title
+st.markdown('<h1 class="main-header">📊 COVID-Era Earnings Manipulation Analysis</h1>', unsafe_allow_html=True)
+st.markdown('<p style="text-align: center; font-size: 1.2rem; color: #666;">A Difference-in-Differences (DiD) Analysis of Financial Reporting During the Pandemic</p>', unsafe_allow_html=True)
 
 # ============================================================================
 # SIDEBAR - DATA UPLOAD & CONFIGURATION
@@ -117,19 +107,18 @@ if 'data_loaded' not in st.session_state:
 with st.sidebar:
     st.markdown("## 📁 Data Configuration")
     
-    # Option selection
+    # Data source selection
     data_option = st.radio(
         "Choose data source:",
-        ["Upload CSV File", "Generate Sample Data", "Use Demo Dataset"],
-        index=0
+        ["📤 Upload CSV File", "🎲 Generate Sample Data", "🚀 Use Demo Data"]
     )
     
-    if data_option == "Upload CSV File":
+    if data_option == "📤 Upload CSV File":
         st.markdown("### Upload Your CSV")
         uploaded_file = st.file_uploader(
-            "Choose a CSV file with financial data",
+            "Choose a CSV file",
             type=['csv'],
-            help="File should contain columns: company_id, year, treatment_group, post_covid, revenue, net_profit, etc."
+            help="CSV should contain: company_id, year, treatment_group, post_covid, net_profit"
         )
         
         if uploaded_file is not None:
@@ -142,281 +131,233 @@ with st.sidebar:
                 
                 if missing_cols:
                     st.error(f"❌ Missing required columns: {missing_cols}")
-                    st.stop()
-                
-                # Store in session state
-                st.session_state.df = df
-                st.session_state.data_loaded = True
-                st.success(f"✅ Data loaded successfully!")
-                
-                # Show file info
-                st.info(f"""
-                **File Information:**
-                - Filename: {uploaded_file.name}
-                - Size: {uploaded_file.size / 1024:.1f} KB
-                - Rows: {len(df):,}
-                - Columns: {len(df.columns)}
-                - Companies: {df['company_id'].nunique()}
-                """)
-                
+                else:
+                    st.session_state.df = df
+                    st.session_state.data_loaded = True
+                    st.success(f"✅ Data loaded successfully!")
+                    st.info(f"""
+                    **File Info:**
+                    - Rows: {len(df):,}
+                    - Columns: {len(df.columns)}
+                    - Companies: {df['company_id'].nunique()}
+                    - Years: {df['year'].min()} to {df['year'].max()}
+                    """)
+                    
             except Exception as e:
-                st.error(f"Error reading file: {str(e)}")
+                st.error(f"❌ Error reading file: {str(e)}")
     
-    elif data_option == "Generate Sample Data":
+    elif data_option == "🎲 Generate Sample Data":
         st.markdown("### Generate Sample Data")
         
-        # Configuration for sample data
-        n_companies = st.slider("Number of companies", 50, 500, 200)
-        years = st.multiselect(
-            "Select years",
-            [2017, 2018, 2019, 2020, 2021, 2022],
-            [2018, 2019, 2020, 2021]
-        )
+        sample_size = st.slider("Number of companies", 50, 500, 200)
         
         if st.button("Generate Data", type="primary"):
             with st.spinner("Generating sample data..."):
-                # Generate sample data
                 np.random.seed(42)
                 
-                industries = {
-                    'Aviation': {'treatment': 1, 'covid_impact': 0.4},
-                    'Hospitality': {'treatment': 1, 'covid_impact': 0.5},
-                    'Real Estate': {'treatment': 1, 'covid_impact': 0.3},
-                    'IT': {'treatment': 0, 'covid_impact': 0.1},
-                    'FMCG': {'treatment': 0, 'covid_impact': -0.05},
-                    'Pharma': {'treatment': 0, 'covid_impact': -0.1}
-                }
+                # Generate realistic sample data
+                n_companies = sample_size
+                industries = ['Aviation', 'Hospitality', 'Real Estate', 'IT', 'FMCG', 'Pharma']
+                years = [2018, 2019, 2020, 2021]
                 
                 data = []
                 for company_id in range(n_companies):
-                    industry = np.random.choice(list(industries.keys()))
-                    industry_info = industries[industry]
+                    industry = np.random.choice(industries)
+                    treatment = 1 if industry in ['Aviation', 'Hospitality', 'Real Estate'] else 0
                     
-                    base_revenue = np.random.lognormal(mean=12, sigma=0.8)
+                    base_revenue = np.random.lognormal(12, 0.5)
                     growth_rate = np.random.normal(0.08, 0.03)
-                    volatility = np.random.uniform(0.05, 0.15)
                     
                     for year_idx, year in enumerate(years):
-                        # Time trend with company-specific growth
+                        # Revenue calculation
                         time_trend = (1 + growth_rate) ** year_idx
+                        revenue = base_revenue * time_trend * np.random.lognormal(0, 0.1)
                         
-                        # Calculate base revenue
-                        revenue = base_revenue * time_trend * np.random.lognormal(0, volatility)
+                        # COVID impact
+                        if year >= 2020 and treatment == 1:
+                            revenue *= np.random.uniform(0.5, 0.8)  # Significant reduction
                         
-                        # Apply COVID impact
-                        if year >= 2020:
-                            covid_effect = np.random.normal(1 - industry_info['covid_impact'], 0.1)
-                            revenue *= max(covid_effect, 0.5)
-                        
-                        # Profit with potential manipulation
-                        base_margin = np.random.uniform(0.05, 0.25)
+                        # Profit margin with potential manipulation
+                        base_margin = np.random.uniform(0.05, 0.2)
                         
                         # Simulate earnings manipulation in treatment group post-COVID
-                        if industry_info['treatment'] == 1 and year >= 2020:
-                            manipulation = np.random.uniform(0, 0.2)  # Positive earnings manipulation
-                            profit_margin = base_margin + manipulation
+                        if year >= 2020 and treatment == 1:
+                            if np.random.random() < 0.4:  # 40% chance of manipulation
+                                manipulation = np.random.uniform(0.05, 0.15)
+                                profit_margin = base_margin + manipulation
+                            else:
+                                profit_margin = base_margin
                         else:
-                            profit_margin = base_margin + np.random.normal(0, 0.02)
+                            profit_margin = base_margin
                         
                         net_profit = revenue * profit_margin
-                        
-                        # Generate other financial metrics
-                        cfo = net_profit * np.random.uniform(0.7, 1.3)
-                        total_assets = revenue * np.random.uniform(1.5, 3.0)
-                        receivables = revenue * np.random.uniform(0.15, 0.35)
-                        debt = total_assets * np.random.uniform(0.2, 0.6)
                         
                         data.append({
                             'company_id': f'COMP{company_id:04d}',
                             'company_name': f'{industry} Company {company_id}',
                             'industry': industry,
                             'year': year,
-                            'treatment_group': industry_info['treatment'],
+                            'treatment_group': treatment,
                             'post_covid': 1 if year >= 2020 else 0,
                             'revenue': round(revenue, 2),
                             'net_profit': round(net_profit, 2),
-                            'cfo': round(cfo, 2),
-                            'total_assets': round(total_assets, 2),
-                            'receivables': round(receivables, 2),
-                            'debt': round(debt, 2),
+                            'cfo': round(net_profit * np.random.uniform(0.8, 1.2), 2),
+                            'total_assets': round(revenue * np.random.uniform(1.5, 3.0), 2),
+                            'receivables': round(revenue * np.random.uniform(0.1, 0.3), 2),
+                            'debt': round(revenue * np.random.uniform(0.5, 1.5), 2),
                             'profit_margin': round(profit_margin * 100, 2)
                         })
                 
                 df = pd.DataFrame(data)
                 st.session_state.df = df
                 st.session_state.data_loaded = True
-                st.success(f"✅ Generated {len(df)} rows of sample data!")
+                st.success(f"✅ Generated {len(df):,} rows of sample data!")
     
-    else:  # Use Demo Dataset
-        if st.button("Load Demo Dataset", type="primary"):
-            # Create a comprehensive demo dataset
+    else:  # Use Demo Data
+        st.markdown("### Demo Dataset")
+        
+        if st.button("Load Demo Data", type="primary"):
+            # Create simple demo data
             np.random.seed(123)
-            n_companies = 150
-            years = [2018, 2019, 2020, 2021]
-            
-            industries = ['Aviation', 'Hospitality', 'Real Estate', 'IT', 'FMCG', 'Pharma']
-            treatment_map = {ind: 1 if ind in ['Aviation', 'Hospitality', 'Real Estate'] else 0 for ind in industries}
             
             data = []
-            for i in range(n_companies):
-                industry = np.random.choice(industries)
-                treatment = treatment_map[industry]
+            for i in range(150):
+                treatment = np.random.choice([0, 1], p=[0.6, 0.4])
+                industry = 'Aviation' if treatment == 1 else 'IT'
                 
-                base_rev = np.random.uniform(100, 10000)
-                
-                for year in years:
-                    # Revenue calculation
-                    growth = np.random.normal(0.1, 0.05)
-                    rev = base_rev * (1 + growth) ** (year - 2018)
+                for year in [2018, 2019, 2020, 2021]:
+                    base = 1000 + i * 10
                     
-                    # COVID impact
+                    # Revenue affected by COVID for treatment group
                     if year >= 2020 and treatment == 1:
-                        rev *= np.random.uniform(0.5, 0.9)
-                    
-                    # Net profit with potential manipulation
-                    margin = np.random.uniform(0.05, 0.25)
-                    if year >= 2020 and treatment == 1:
-                        # Add earnings manipulation
-                        margin += np.random.uniform(0.05, 0.15)
-                    
-                    profit = rev * margin
-                    
-                    # Other metrics
-                    cfo = profit * np.random.uniform(0.8, 1.2)
-                    assets = rev * np.random.uniform(1.5, 3)
+                        revenue = base * (1 + 0.1 * (year - 2018)) * np.random.uniform(0.6, 0.9)
+                        # Potential earnings manipulation
+                        profit = revenue * np.random.uniform(0.12, 0.25)
+                    else:
+                        revenue = base * (1 + 0.1 * (year - 2018)) * np.random.uniform(0.9, 1.1)
+                        profit = revenue * np.random.uniform(0.08, 0.15)
                     
                     data.append({
                         'company_id': f'DEMO{i:03d}',
-                        'company_name': f'{industry} Demo {i}',
                         'industry': industry,
                         'year': year,
                         'treatment_group': treatment,
                         'post_covid': 1 if year >= 2020 else 0,
-                        'revenue': round(rev, 2),
+                        'revenue': round(revenue, 2),
                         'net_profit': round(profit, 2),
-                        'cfo': round(cfo, 2),
-                        'total_assets': round(assets, 2),
-                        'receivables': round(rev * np.random.uniform(0.1, 0.3), 2),
-                        'debt': round(assets * np.random.uniform(0.1, 0.5), 2)
+                        'cfo': round(profit * np.random.uniform(0.9, 1.1), 2)
                     })
             
             df = pd.DataFrame(data)
             st.session_state.df = df
             st.session_state.data_loaded = True
-            st.success("✅ Demo dataset loaded!")
+            st.success("✅ Demo data loaded!")
     
     # Analysis Configuration
-    st.markdown("---")
-    st.markdown("## ⚙️ Analysis Settings")
-    
     if st.session_state.data_loaded:
-        outcome_options = ['net_profit', 'cfo', 'revenue', 'profit_margin', 'receivables', 'debt']
-        available_cols = [col for col in outcome_options if col in st.session_state.df.columns]
+        st.markdown("---")
+        st.markdown("## ⚙️ Analysis Settings")
         
-        outcome_var = st.selectbox(
-            "Select outcome variable for DiD analysis:",
-            available_cols,
-            index=0
-        )
+        df = st.session_state.df
         
-        st.session_state.outcome_var = outcome_var
+        # Select outcome variable
+        numeric_cols = [col for col in df.select_dtypes(include=[np.number]).columns 
+                       if col not in ['year', 'treatment_group', 'post_covid', 'company_id']]
+        
+        if numeric_cols:
+            outcome_var = st.selectbox(
+                "Select outcome variable:",
+                numeric_cols,
+                index=numeric_cols.index('net_profit') if 'net_profit' in numeric_cols else 0
+            )
+            st.session_state.outcome_var = outcome_var
         
         # Time period selection
-        years = sorted(st.session_state.df['year'].unique())
-        pre_period = st.selectbox(
-            "Pre-COVID period (end year):",
-            years,
-            index=min(1, len(years)-1)
-        )
+        years = sorted(df['year'].unique())
+        if len(years) >= 2:
+            pre_covid_end = st.selectbox(
+                "Pre-COVID period (end year):",
+                [y for y in years if y < 2020] or years[:-1],
+                index=0
+            )
+            
+            post_covid_start = st.selectbox(
+                "Post-COVID period (start year):",
+                [y for y in years if y > pre_covid_end],
+                index=0
+            )
+            
+            st.session_state.pre_covid_end = pre_covid_end
+            st.session_state.post_covid_start = post_covid_start
         
-        post_period = st.selectbox(
-            "Post-COVID period (start year):",
-            [y for y in years if y > pre_period],
-            index=0
-        )
-        
-        st.session_state.pre_period = pre_period
-        st.session_state.post_period = post_period
-        
-        # Additional analysis options
-        include_controls = st.checkbox("Include control variables", value=False)
-        robust_se = st.checkbox("Use robust standard errors", value=True)
-        
-        if st.button("🚀 Run Analysis", type="primary"):
+        if st.button("🚀 Run DiD Analysis", type="primary", use_container_width=True):
             st.session_state.analysis_complete = True
             st.rerun()
+    
+    # Download template
+    st.markdown("---")
+    st.markdown("## 📥 Download Template")
+    
+    template_data = {
+        'company_id': ['CMP001', 'CMP001', 'CMP002', 'CMP002'],
+        'year': [2019, 2020, 2019, 2020],
+        'treatment_group': [1, 1, 0, 0],
+        'post_covid': [0, 1, 0, 1],
+        'net_profit': [100.0, 120.0, 200.0, 210.0],
+        'revenue': [1000.0, 1100.0, 2000.0, 2050.0],
+        'cfo': [90.0, 95.0, 180.0, 190.0],
+        'industry': ['Aviation', 'Aviation', 'IT', 'IT']
+    }
+    template_df = pd.DataFrame(template_data)
+    
+    csv = template_df.to_csv(index=False)
+    st.download_button(
+        label="Download CSV Template",
+        data=csv,
+        file_name="financial_data_template.csv",
+        mime="text/csv",
+        use_container_width=True
+    )
 
 # ============================================================================
-# MAIN CONTENT AREA
+# MAIN CONTENT
 # ============================================================================
 if not st.session_state.data_loaded:
-    # Welcome screen with upload instructions
-    st.markdown("""
-    <div style="text-align: center; padding: 3rem;">
-        <h2>📤 Welcome to COVID Earnings Analysis</h2>
-        <p style="font-size: 1.2rem; margin: 2rem 0;">
-            Upload your financial data or generate sample data to begin analysis
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-    
+    # Welcome screen
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
-        st.markdown('<div class="upload-section">', unsafe_allow_html=True)
-        st.markdown("### 📎 Ready to Upload?")
+        st.markdown('<div class="upload-box">', unsafe_allow_html=True)
+        st.markdown("## 📤 Get Started")
         st.markdown("""
-        1. **Prepare your CSV file** with financial data
-        2. **Required columns:** company_id, year, treatment_group, post_covid
-        3. **Optional columns:** revenue, net_profit, cfo, total_assets, etc.
-        4. **Use the sidebar** to upload your file
+        1. **Upload your CSV file** using the sidebar
+        2. **Or generate sample data** for testing
+        3. **Configure analysis settings**
+        4. **Run DiD analysis**
+        
+        **Required columns:** company_id, year, treatment_group, post_covid
         """)
-        
-        # Download template
-        template_data = {
-            'company_id': ['CMP001', 'CMP001', 'CMP002', 'CMP002'],
-            'year': [2019, 2020, 2019, 2020],
-            'treatment_group': [1, 1, 0, 0],
-            'post_covid': [0, 1, 0, 1],
-            'revenue': [1000.0, 850.0, 2000.0, 2100.0],
-            'net_profit': [100.0, 120.0, 200.0, 210.0],
-            'cfo': [90.0, 85.0, 180.0, 190.0],
-            'industry': ['Aviation', 'Aviation', 'IT', 'IT']
-        }
-        template_df = pd.DataFrame(template_data)
-        
-        csv = template_df.to_csv(index=False)
-        st.download_button(
-            label="📥 Download CSV Template",
-            data=csv,
-            file_name="financial_data_template.csv",
-            mime="text/csv",
-            key="template_download"
-        )
         st.markdown("</div>", unsafe_allow_html=True)
     
-    st.markdown("---")
-    
     # Project overview
-    st.markdown("""
-    ## 📋 Project Overview
+    st.markdown("---")
+    st.markdown("## 📋 Project Overview")
     
+    st.markdown("""
     This application performs **Difference-in-Differences (DiD) analysis** to detect potential earnings manipulation during the COVID-19 pandemic.
     
     ### Key Features:
-    
-    1. **Data Upload & Validation** - Upload CSV files with financial data
-    2. **Difference-in-Differences Analysis** - Compare treatment vs control groups
-    3. **Visualization Dashboard** - Interactive charts and graphs
-    4. **Statistical Testing** - Hypothesis tests and regression analysis
-    5. **Report Generation** - Exportable analysis reports
+    - **CSV Data Upload**: Upload your financial data
+    - **DiD Analysis**: Treatment vs Control group comparison
+    - **Interactive Visualizations**: Plotly charts and graphs
+    - **Statistical Results**: Manual and regression DiD calculations
+    - **Report Generation**: Exportable analysis reports
     
     ### Methodology:
-    
-    - **Treatment Group**: Industries heavily affected by COVID-19 (Aviation, Hospitality, Real Estate)
+    - **Treatment Group**: COVID-affected industries (Aviation, Hospitality, Real Estate)
     - **Control Group**: Less affected industries (IT, FMCG, Pharma)
-    - **Analysis Period**: Pre-COVID (2018-2019) vs Post-COVID (2020-2021)
-    - **Outcome Variables**: Net profit, Cash flow, Receivables, etc.
+    - **Pre-Period**: Before 2020
+    - **Post-Period**: 2020 and later
     """)
     
     st.stop()
@@ -426,74 +367,75 @@ if not st.session_state.data_loaded:
 # ============================================================================
 df = st.session_state.df
 
-# Create tabs for different sections
+# Create tabs
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📊 Data Overview", 
+    "📊 Dashboard", 
     "📈 DiD Analysis", 
     "📉 Visualizations", 
-    "🧪 Statistical Tests",
-    "📋 Report"
+    "📋 Statistical Tests",
+    "📄 Report"
 ])
 
 with tab1:
-    st.header("Data Overview")
+    st.header("Data Dashboard")
     
+    # Key metrics
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         st.metric(
-            "Total Companies",
+            "Total Companies", 
             df['company_id'].nunique(),
             help="Unique companies in dataset"
         )
     
     with col2:
-        treatment_pct = (df[df['treatment_group'] == 1]['company_id'].nunique() / 
-                        df['company_id'].nunique() * 100)
+        treatment_count = df[df['treatment_group'] == 1]['company_id'].nunique()
         st.metric(
-            "Treatment Group",
-            f"{treatment_pct:.1f}%",
-            help="Percentage of companies in treatment group"
+            "Treatment Group", 
+            treatment_count,
+            delta=f"{treatment_count/df['company_id'].nunique()*100:.1f}%"
         )
     
     with col3:
         years = df['year'].nunique()
         st.metric(
-            "Years Covered",
+            "Years", 
             years,
-            help="Number of years in dataset"
+            help="Years covered in data"
         )
     
     with col4:
-        st.metric(
-            "Total Observations",
-            f"{len(df):,}",
-            help="Total rows in dataset"
-        )
+        if 'net_profit' in df.columns:
+            avg_profit = df['net_profit'].mean()
+            st.metric(
+                "Avg. Net Profit", 
+                f"${avg_profit:,.0f}",
+                help="Average net profit across all companies"
+            )
     
     # Data preview
     st.subheader("Data Preview")
     
-    show_all = st.checkbox("Show all columns", value=False)
-    if show_all:
-        st.dataframe(df, use_container_width=True, height=400)
-    else:
-        # Show only key columns
-        key_cols = ['company_id', 'company_name', 'industry', 'year', 
-                   'treatment_group', 'post_covid', 'revenue', 'net_profit']
-        available_cols = [col for col in key_cols if col in df.columns]
-        st.dataframe(df[available_cols], use_container_width=True, height=400)
+    show_cols = st.multiselect(
+        "Select columns to display:",
+        df.columns.tolist(),
+        default=['company_id', 'year', 'treatment_group', 'post_covid', 'net_profit', 'revenue'][:5]
+    )
     
-    # Data summary statistics
+    if show_cols:
+        st.dataframe(df[show_cols].head(100), use_container_width=True, height=300)
+    
+    # Summary statistics
     st.subheader("Summary Statistics")
     
-    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-    if numeric_cols:
-        summary_stats = df[numeric_cols].describe().T
-        summary_stats['missing'] = df[numeric_cols].isnull().sum()
-        summary_stats['missing_pct'] = (summary_stats['missing'] / len(df) * 100).round(2)
+    numeric_cols = df.select_dtypes(include=[np.number]).columns
+    if len(numeric_cols) > 0:
+        summary = df[numeric_cols].describe().T
+        summary['missing'] = df[numeric_cols].isnull().sum()
+        summary['missing_pct'] = (summary['missing'] / len(df) * 100).round(1)
         
-        st.dataframe(summary_stats, use_container_width=True)
+        st.dataframe(summary, use_container_width=True)
     
     # Industry distribution
     if 'industry' in df.columns:
@@ -504,27 +446,26 @@ with tab1:
         fig = px.pie(
             values=industry_counts.values,
             names=industry_counts.index,
-            title="Company Distribution by Industry",
+            title="Companies by Industry",
             hole=0.3
         )
-        fig.update_traces(textposition='inside', textinfo='percent+label')
         st.plotly_chart(fig, use_container_width=True)
 
 with tab2:
     st.header("Difference-in-Differences Analysis")
     
     if not st.session_state.analysis_complete:
-        st.info("👈 Configure analysis settings in sidebar and click 'Run Analysis'")
+        st.info("👈 Configure analysis settings in sidebar and click 'Run DiD Analysis'")
         st.stop()
     
-    outcome_var = st.session_state.outcome_var
+    outcome_var = st.session_state.get('outcome_var', 'net_profit')
+    pre_end = st.session_state.get('pre_covid_end', 2019)
+    post_start = st.session_state.get('post_covid_start', 2020)
     
-    # Prepare data for DiD analysis
+    # Prepare data for DiD
     analysis_df = df.copy()
-    
-    # Define pre and post periods
     analysis_df['period'] = analysis_df['year'].apply(
-        lambda x: 'pre' if x <= st.session_state.pre_period else 'post'
+        lambda x: 'pre' if x <= pre_end else 'post'
     )
     analysis_df['post_dummy'] = (analysis_df['period'] == 'post').astype(int)
     
@@ -532,32 +473,28 @@ with tab2:
     st.subheader("1. Manual DiD Calculation")
     
     # Calculate group means
-    did_table = analysis_df.groupby(['treatment_group', 'period'])[outcome_var].mean().unstack()
+    group_means = analysis_df.groupby(['treatment_group', 'period'])[outcome_var].mean().unstack()
     
-    # Calculate differences
-    did_table['Change'] = did_table['post'] - did_table['pre']
+    # Calculate changes
+    control_change = group_means.loc[0, 'post'] - group_means.loc[0, 'pre']
+    treatment_change = group_means.loc[1, 'post'] - group_means.loc[1, 'pre']
+    did_effect = treatment_change - control_change
     
-    # Calculate DiD effect
-    treatment_effect = did_table.loc[1, 'Change']
-    control_effect = did_table.loc[0, 'Change']
-    did_effect = treatment_effect - control_effect
-    
-    # Format table for display
-    display_table = pd.DataFrame({
+    # Display results
+    results_df = pd.DataFrame({
         'Group': ['Control (0)', 'Treatment (1)'],
-        'Pre-Period Mean': [did_table.loc[0, 'pre'], did_table.loc[1, 'pre']],
-        'Post-Period Mean': [did_table.loc[0, 'post'], did_table.loc[1, 'post']],
-        'Change': [control_effect, treatment_effect]
+        'Pre-Period Mean': [group_means.loc[0, 'pre'], group_means.loc[1, 'pre']],
+        'Post-Period Mean': [group_means.loc[0, 'post'], group_means.loc[1, 'post']],
+        'Change': [control_change, treatment_change]
     })
     
-    # Display table
     st.dataframe(
-        display_table.style.format({
+        results_df.style.format({
             'Pre-Period Mean': '{:.2f}',
             'Post-Period Mean': '{:.2f}',
             'Change': '{:.2f}'
         }).apply(
-            lambda x: ['background-color: #e8f5e9' if x.name == 1 else '' for _ in x], 
+            lambda x: ['background-color: #e8f5e9' if x.name == 1 else '' for _ in x],
             axis=1
         ),
         use_container_width=True
@@ -567,137 +504,133 @@ with tab2:
     st.markdown(f"""
     <div class="success-box">
     <h4>🎯 DiD Result</h4>
-    <p><strong>Treatment Effect (Group 1 Change):</strong> {treatment_effect:.2f}</p>
-    <p><strong>Control Effect (Group 0 Change):</strong> {control_effect:.2f}</p>
-    <p><strong>DiD Coefficient (Treatment - Control):</strong> <span style="color: #28a745; font-weight: bold;">{did_effect:.2f}</span></p>
+    <p><strong>Control Group Change:</strong> {control_change:.2f}</p>
+    <p><strong>Treatment Group Change:</strong> {treatment_change:.2f}</p>
+    <p><strong>DiD Effect (Treatment - Control):</strong> <span style="color: #28a745; font-weight: bold;">{did_effect:.2f}</span></p>
     </div>
     """, unsafe_allow_html=True)
     
     # Interpretation
+    interpretation = """
+    <div class="info-box">
+    <h4>📊 Interpretation</h4>
+    """
+    
     if did_effect > 0:
-        interpretation = f"""
-        <div class="info-box">
-        <h4>📊 Interpretation</h4>
-        <p>The treatment group shows a <strong>{did_effect:.2f}</strong> higher change in {outcome_var} compared to the control group.</p>
+        interpretation += f"""
+        <p>The treatment group shows <strong>{did_effect:.2f}</strong> higher change in {outcome_var} compared to the control group.</p>
         <p>This suggests <strong>potential earnings manipulation</strong> in COVID-affected industries post-pandemic.</p>
-        </div>
         """
     else:
-        interpretation = f"""
-        <div class="info-box">
-        <h4>📊 Interpretation</h4>
-        <p>The treatment group shows a <strong>{did_effect:.2f}</strong> change in {outcome_var} compared to the control group.</p>
+        interpretation += f"""
+        <p>The treatment group shows <strong>{did_effect:.2f}</strong> change in {outcome_var} compared to the control group.</p>
         <p>This suggests <strong>no significant evidence of earnings manipulation</strong> in the treatment group.</p>
-        </div>
         """
     
+    interpretation += "</div>"
     st.markdown(interpretation, unsafe_allow_html=True)
     
     # 2. Regression DiD Analysis
     st.subheader("2. Regression DiD Analysis")
     
-    # Create interaction term
-    analysis_df['treatment_post'] = analysis_df['treatment_group'] * analysis_df['post_dummy']
-    
-    # Run regression
-    formula = f"{outcome_var} ~ treatment_group + post_dummy + treatment_post"
-    
-    try:
-        model = smf.ols(formula, data=analysis_df).fit()
-        
-        # Display regression results
-        st.write("**Regression Results:**")
-        
-        # Create summary table
-        coef_df = pd.DataFrame({
-            'Variable': model.params.index,
-            'Coefficient': model.params.values,
-            'Std Error': model.bse.values,
-            't-value': model.tvalues.values,
-            'P-value': model.pvalues.values,
-            'Significance': ['***' if p < 0.001 else '**' if p < 0.01 else '*' if p < 0.05 else '' for p in model.pvalues.values]
-        })
-        
-        # Format the table
-        st.dataframe(
-            coef_df.style.format({
-                'Coefficient': '{:.4f}',
-                'Std Error': '{:.4f}',
-                't-value': '{:.2f}',
-                'P-value': '{:.4f}'
-            }).apply(
-                lambda x: ['background-color: #e8f5e9' if 'treatment_post' in str(x['Variable']) else '' for _ in x],
-                axis=1
-            ),
-            use_container_width=True
-        )
-        
-        # Key findings
-        did_coef = model.params.get('treatment_post', 0)
-        did_pval = model.pvalues.get('treatment_post', 1)
-        
-        if did_pval < 0.05:
-            significance = "statistically significant"
-            sig_color = "#28a745"
-        else:
-            significance = "not statistically significant"
-            sig_color = "#dc3545"
-        
-        st.markdown(f"""
-        <div style="padding: 1.5rem; background-color: #f8f9fa; border-radius: 10px; border-left: 5px solid {sig_color};">
-        <h4>🔑 Key Finding</h4>
-        <p>The DiD coefficient (treatment × post interaction) is <strong>{did_coef:.4f}</strong></p>
-        <p>P-value: <strong>{did_pval:.4f}</strong></p>
-        <p>This effect is <strong style="color: {sig_color}">{significance}</strong> at the 5% level.</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-    except Exception as e:
-        st.error(f"Regression error: {str(e)}")
+    if STATS_AVAILABLE:
+        try:
+            # Create interaction term
+            analysis_df['treatment_post'] = analysis_df['treatment_group'] * analysis_df['post_dummy']
+            
+            # Run regression
+            model = smf.ols(f"{outcome_var} ~ treatment_group + post_dummy + treatment_post", 
+                          data=analysis_df).fit()
+            
+            # Display results
+            coef_df = pd.DataFrame({
+                'Variable': model.params.index,
+                'Coefficient': model.params.values,
+                'Std Error': model.bse.values,
+                't-value': model.tvalues.values,
+                'P-value': model.pvalues.values
+            })
+            
+            st.dataframe(
+                coef_df.style.format({
+                    'Coefficient': '{:.4f}',
+                    'Std Error': '{:.4f}',
+                    't-value': '{:.2f}',
+                    'P-value': '{:.4f}'
+                }).apply(
+                    lambda x: ['background-color: #e8f5e9' if 'treatment_post' in str(x['Variable']) else '' for _ in x],
+                    axis=1
+                ),
+                use_container_width=True
+            )
+            
+            # Key finding
+            did_coef = model.params.get('treatment_post', 0)
+            did_pval = model.pvalues.get('treatment_post', 1)
+            
+            if did_pval < 0.05:
+                sig_text = "statistically significant"
+                sig_color = "#28a745"
+            else:
+                sig_text = "not statistically significant"
+                sig_color = "#dc3545"
+            
+            st.markdown(f"""
+            <div style="padding: 1rem; background-color: #f8f9fa; border-radius: 5px; border-left: 5px solid {sig_color};">
+            <h4>🔑 Key Finding</h4>
+            <p><strong>DiD Coefficient (treatment × post):</strong> {did_coef:.4f}</p>
+            <p><strong>P-value:</strong> {did_pval:.4f}</p>
+            <p>This effect is <strong style="color: {sig_color}">{sig_text}</strong> at the 5% level.</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+        except Exception as e:
+            st.error(f"Regression error: {str(e)}")
+    else:
+        st.warning("Statsmodels not available. Regression analysis disabled.")
 
 with tab3:
     st.header("Visualizations")
     
-    if not st.session_state.data_loaded:
-        st.info("Load data to see visualizations")
-        st.stop()
+    outcome_var = st.session_state.get('outcome_var', 'net_profit')
     
-    # Visualization type selector
+    # Visualization selector
     viz_type = st.selectbox(
         "Select visualization type:",
-        ["Time Trends", "Group Comparison", "Parallel Trends", "Distribution", "Scatter Plot"]
+        ["Time Trends", "Group Comparison", "Distribution Analysis", "Scatter Plot"]
     )
     
     if viz_type == "Time Trends":
-        st.subheader(f"{st.session_state.outcome_var} Trends Over Time")
+        st.subheader(f"{outcome_var} Trends Over Time")
         
-        # Calculate group averages by year
-        trend_data = df.groupby(['year', 'treatment_group'])[st.session_state.outcome_var].mean().reset_index()
+        # Calculate average by year and group
+        trend_data = df.groupby(['year', 'treatment_group'])[outcome_var].mean().reset_index()
         trend_data['Group'] = trend_data['treatment_group'].apply(lambda x: 'Treatment' if x == 1 else 'Control')
         
         fig = px.line(
             trend_data,
             x='year',
-            y=st.session_state.outcome_var,
+            y=outcome_var,
             color='Group',
             markers=True,
-            title=f"Average {st.session_state.outcome_var} Over Time by Group",
+            title=f"Average {outcome_var} Over Time",
             line_shape='linear'
         )
         
-        # Add COVID period shading
-        fig.add_vrect(
-            x0=2019.5, x1=2021.5,
-            fillcolor="red",
-            opacity=0.1,
-            line_width=0,
-            annotation_text="COVID Period",
-            annotation_position="top left"
-        )
+        # Add COVID period shading if 2020 exists
+        if 2020 in df['year'].unique():
+            fig.add_vrect(
+                x0=2019.5, x1=2021.5,
+                fillcolor="red",
+                opacity=0.1,
+                line_width=0,
+                annotation_text="COVID Period",
+                annotation_position="top left"
+            )
         
         fig.update_layout(
             xaxis_title="Year",
-            yaxis_title=st.session_state.outcome_var.replace('_', ' ').title(),
+            yaxis_title=outcome_var.replace('_', ' ').title(),
             hovermode='x unified'
         )
         
@@ -718,65 +651,21 @@ with tab3:
         fig = px.box(
             df_viz,
             x='Period',
-            y=st.session_state.outcome_var,
+            y=outcome_var,
             color='Group',
-            title=f"Distribution of {st.session_state.outcome_var.replace('_', ' ').title()} by Period and Group",
+            title=f"Distribution of {outcome_var.replace('_', ' ').title()}",
             points=False
         )
         
         fig.update_layout(
             boxmode='group',
             xaxis_title="",
-            yaxis_title=st.session_state.outcome_var.replace('_', ' ').title()
+            yaxis_title=outcome_var.replace('_', ' ').title()
         )
         
         st.plotly_chart(fig, use_container_width=True)
         
-    elif viz_type == "Parallel Trends":
-        st.subheader("Parallel Trends Assumption Check")
-        
-        # Check pre-COVID trends
-        pre_covid_data = df[df['year'] < 2020].copy()
-        
-        if len(pre_covid_data) > 0:
-            pre_trends = pre_covid_data.groupby(['year', 'treatment_group'])[st.session_state.outcome_var].mean().unstack()
-            
-            fig = go.Figure()
-            
-            colors = ['#1f77b4', '#ff7f0e']
-            for i, group in enumerate([0, 1]):
-                group_name = 'Control' if group == 0 else 'Treatment'
-                fig.add_trace(go.Scatter(
-                    x=pre_trends.index,
-                    y=pre_trends[group],
-                    mode='lines+markers',
-                    name=group_name,
-                    line=dict(color=colors[i], width=3),
-                    marker=dict(size=8)
-                ))
-            
-            fig.update_layout(
-                title="Pre-COVID Trends (Parallel Trends Assumption)",
-                xaxis_title="Year",
-                yaxis_title=st.session_state.outcome_var.replace('_', ' ').title(),
-                showlegend=True,
-                hovermode='x unified'
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Statistical test for parallel trends
-            st.markdown("""
-            <div class="info-box">
-            <h4>📝 Parallel Trends Assumption</h4>
-            <p>For DiD to be valid, treatment and control groups should have similar trends before the treatment.</p>
-            <p>If lines are approximately parallel before COVID (2018-2019), the assumption holds.</p>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.warning("Insufficient pre-COVID data for parallel trends check")
-            
-    elif viz_type == "Distribution":
+    elif viz_type == "Distribution Analysis":
         st.subheader("Distribution Analysis")
         
         col1, col2 = st.columns(2)
@@ -785,13 +674,13 @@ with tab3:
             # Histogram
             fig1 = px.histogram(
                 df,
-                x=st.session_state.outcome_var,
+                x=outcome_var,
                 color='treatment_group',
                 nbins=30,
-                title=f"Distribution of {st.session_state.outcome_var.replace('_', ' ').title()}",
-                labels={'treatment_group': 'Treatment Group'},
+                title=f"Distribution of {outcome_var.replace('_', ' ').title()}",
                 barmode='overlay',
-                opacity=0.7
+                opacity=0.7,
+                labels={'treatment_group': 'Treatment Group'}
             )
             st.plotly_chart(fig1, use_container_width=True)
         
@@ -799,63 +688,63 @@ with tab3:
             # Violin plot
             fig2 = px.violin(
                 df,
-                y=st.session_state.outcome_var,
+                y=outcome_var,
                 x='treatment_group',
                 color='treatment_group',
                 box=True,
-                points="all",
-                title=f"Violin Plot by Treatment Group",
+                points=False,
+                title=f"Violin Plot by Group",
                 labels={'treatment_group': 'Group (0=Control, 1=Treatment)'}
             )
             st.plotly_chart(fig2, use_container_width=True)
     
     else:  # Scatter Plot
-        st.subheader("Scatter Plot Analysis")
+        st.subheader("Scatter Plot")
         
-        # Select variables for scatter plot
+        # Select X variable
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        x_var = st.selectbox(
-            "Select X-axis variable:",
-            numeric_cols,
-            index=numeric_cols.index('revenue') if 'revenue' in numeric_cols else 0
-        )
+        x_options = [col for col in numeric_cols if col != outcome_var]
         
-        fig = px.scatter(
-            df,
-            x=x_var,
-            y=st.session_state.outcome_var,
-            color='treatment_group',
-            size='total_assets' if 'total_assets' in df.columns else None,
-            hover_data=['company_name', 'industry', 'year'],
-            title=f"{st.session_state.outcome_var.replace('_', ' ').title()} vs {x_var.replace('_', ' ').title()}",
-            labels={'treatment_group': 'Treatment Group'}
-        )
-        
-        # Add trend lines
-        fig.update_traces(marker=dict(opacity=0.6))
-        
-        st.plotly_chart(fig, use_container_width=True)
+        if x_options:
+            x_var = st.selectbox(
+                "Select X-axis variable:",
+                x_options,
+                index=0
+            )
+            
+            fig = px.scatter(
+                df,
+                x=x_var,
+                y=outcome_var,
+                color='treatment_group',
+                hover_data=['year', 'industry'] if 'industry' in df.columns else None,
+                title=f"{outcome_var.replace('_', ' ').title()} vs {x_var.replace('_', ' ').title()}",
+                labels={'treatment_group': 'Treatment Group'}
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
 
 with tab4:
     st.header("Statistical Tests")
     
-    if not st.session_state.data_loaded:
-        st.info("Load data to perform statistical tests")
+    if not STATS_AVAILABLE:
+        st.warning("Statistical tests require statsmodels and scipy. Install via requirements.txt")
         st.stop()
     
-    st.subheader("1. T-tests for Group Differences")
+    outcome_var = st.session_state.get('outcome_var', 'net_profit')
+    
+    st.subheader("T-tests for Group Differences")
     
     # Prepare data
     pre_data = df[df['year'] < 2020]
     post_data = df[df['year'] >= 2020]
     
-    # Perform t-tests
     results = []
     
     # Test 1: Treatment vs Control in Pre-period
     if len(pre_data) > 0:
-        treatment_pre = pre_data[pre_data['treatment_group'] == 1][st.session_state.outcome_var]
-        control_pre = pre_data[pre_data['treatment_group'] == 0][st.session_state.outcome_var]
+        treatment_pre = pre_data[pre_data['treatment_group'] == 1][outcome_var]
+        control_pre = pre_data[pre_data['treatment_group'] == 0][outcome_var]
         
         if len(treatment_pre) > 1 and len(control_pre) > 1:
             t_stat, p_val = stats.ttest_ind(treatment_pre, control_pre, equal_var=False)
@@ -863,7 +752,6 @@ with tab4:
                 'Test': 'Pre-COVID: Treatment vs Control',
                 'Treatment Mean': treatment_pre.mean(),
                 'Control Mean': control_pre.mean(),
-                'Difference': treatment_pre.mean() - control_pre.mean(),
                 't-statistic': t_stat,
                 'p-value': p_val,
                 'Significant': p_val < 0.05
@@ -871,8 +759,8 @@ with tab4:
     
     # Test 2: Treatment vs Control in Post-period
     if len(post_data) > 0:
-        treatment_post = post_data[post_data['treatment_group'] == 1][st.session_state.outcome_var]
-        control_post = post_data[post_data['treatment_group'] == 0][st.session_state.outcome_var]
+        treatment_post = post_data[post_data['treatment_group'] == 1][outcome_var]
+        control_post = post_data[post_data['treatment_group'] == 0][outcome_var]
         
         if len(treatment_post) > 1 and len(control_post) > 1:
             t_stat, p_val = stats.ttest_ind(treatment_post, control_post, equal_var=False)
@@ -880,39 +768,17 @@ with tab4:
                 'Test': 'Post-COVID: Treatment vs Control',
                 'Treatment Mean': treatment_post.mean(),
                 'Control Mean': control_post.mean(),
-                'Difference': treatment_post.mean() - control_post.mean(),
                 't-statistic': t_stat,
                 'p-value': p_val,
                 'Significant': p_val < 0.05
             })
     
-    # Test 3: Treatment Group Pre vs Post
-    if len(pre_data) > 0 and len(post_data) > 0:
-        treatment_pre = pre_data[pre_data['treatment_group'] == 1][st.session_state.outcome_var]
-        treatment_post = post_data[post_data['treatment_group'] == 1][st.session_state.outcome_var]
-        
-        if len(treatment_pre) > 1 and len(treatment_post) > 1:
-            t_stat, p_val = stats.ttest_ind(treatment_pre, treatment_post, equal_var=False)
-            results.append({
-                'Test': 'Treatment Group: Pre vs Post',
-                'Pre Mean': treatment_pre.mean(),
-                'Post Mean': treatment_post.mean(),
-                'Difference': treatment_post.mean() - treatment_pre.mean(),
-                't-statistic': t_stat,
-                'p-value': p_val,
-                'Significant': p_val < 0.05
-            })
-    
-    # Display results
     if results:
         results_df = pd.DataFrame(results)
         st.dataframe(
             results_df.style.format({
                 'Treatment Mean': '{:.2f}',
                 'Control Mean': '{:.2f}',
-                'Pre Mean': '{:.2f}',
-                'Post Mean': '{:.2f}',
-                'Difference': '{:.2f}',
                 't-statistic': '{:.3f}',
                 'p-value': '{:.4f}'
             }).apply(
@@ -921,188 +787,117 @@ with tab4:
             ),
             use_container_width=True
         )
-    
-    # Statistical assumptions check
-    st.subheader("2. Statistical Assumptions Check")
-    
-    # Normality test
-    if st.checkbox("Check normality assumption"):
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # Treatment group normality
-            treatment_data = df[df['treatment_group'] == 1][st.session_state.outcome_var]
-            if len(treatment_data) > 3:
-                stat, p = stats.shapiro(treatment_data)
-                st.metric(
-                    "Treatment Group Normality",
-                    f"p = {p:.4f}",
-                    "Normal" if p > 0.05 else "Not Normal"
-                )
-        
-        with col2:
-            # Control group normality
-            control_data = df[df['treatment_group'] == 0][st.session_state.outcome_var]
-            if len(control_data) > 3:
-                stat, p = stats.shapiro(control_data)
-                st.metric(
-                    "Control Group Normality",
-                    f"p = {p:.4f}",
-                    "Normal" if p > 0.05 else "Not Normal"
-                )
-    
-    # Homogeneity of variance test
-    if st.checkbox("Check homogeneity of variance"):
-        if 'treatment_pre' in locals() and 'control_pre' in locals():
-            stat, p = stats.levene(treatment_pre, control_pre)
-            st.metric(
-                "Homogeneity of Variance (Levene's Test)",
-                f"p = {p:.4f}",
-                "Equal Variances" if p > 0.05 else "Unequal Variances"
-            )
 
 with tab5:
     st.header("Analysis Report")
     
-    if not st.session_state.data_loaded:
-        st.info("Load data to generate report")
-        st.stop()
-    
-    # Generate report content
+    # Generate report
     report_date = datetime.now().strftime("%Y-%m-%d %H:%M")
-    
-    # Calculate key metrics for report
     total_companies = df['company_id'].nunique()
-    treatment_companies = df[df['treatment_group'] == 1]['company_id'].nunique()
-    control_companies = df[df['treatment_group'] == 0]['company_id'].nunique()
-    years_covered = sorted(df['year'].unique())
+    treatment_count = df[df['treatment_group'] == 1]['company_id'].nunique()
+    control_count = df[df['treatment_group'] == 0]['company_id'].nunique()
+    years = sorted(df['year'].unique())
     
     # Get DiD results if available
-    did_result = None
+    did_result = ""
     if st.session_state.analysis_complete:
-        # Recalculate or get from session state
+        # Recalculate or get from session
         analysis_df = df.copy()
+        pre_end = st.session_state.get('pre_covid_end', 2019)
         analysis_df['period'] = analysis_df['year'].apply(
-            lambda x: 'pre' if x <= st.session_state.pre_period else 'post'
+            lambda x: 'pre' if x <= pre_end else 'post'
         )
-        analysis_df['post_dummy'] = (analysis_df['period'] == 'post').astype(int)
         
-        did_table = analysis_df.groupby(['treatment_group', 'period'])[st.session_state.outcome_var].mean().unstack()
-        treatment_effect = did_table.loc[1, 'post'] - did_table.loc[1, 'pre']
-        control_effect = did_table.loc[0, 'post'] - did_table.loc[0, 'pre']
-        did_result = treatment_effect - control_effect
+        group_means = analysis_df.groupby(['treatment_group', 'period'])[st.session_state.outcome_var].mean().unstack()
+        control_change = group_means.loc[0, 'post'] - group_means.loc[0, 'pre']
+        treatment_change = group_means.loc[1, 'post'] - group_means.loc[1, 'pre']
+        did_result = treatment_change - control_change
     
-    # Create report
     report_content = f"""
 # COVID-Era Earnings Manipulation Analysis Report
 
-**Generated:** {report_date}  
-**Dataset:** {total_companies} companies, {len(df)} observations  
-**Analysis Variable:** {st.session_state.outcome_var if st.session_state.analysis_complete else 'Not specified'}
+**Generated:** {report_date}
+**Dataset:** {total_companies} companies, {len(df)} observations
+**Analysis Variable:** {st.session_state.get('outcome_var', 'Not specified')}
 
 ## Executive Summary
 
 This report presents a Difference-in-Differences (DiD) analysis of potential earnings manipulation during the COVID-19 pandemic.
 
 ### Key Findings:
-1. **Dataset Composition**: Analyzed {total_companies} companies ({treatment_companies} treatment, {control_companies} control)
-2. **Time Period**: {min(years_covered)} to {max(years_covered)}
-3. **DiD Result**: {'Not calculated' if did_result is None else f'{did_result:.2f}'}
-4. **Interpretation**: {'Analysis not completed' if did_result is None else 'Potential earnings manipulation detected' if did_result > 0 else 'No significant evidence found'}
+1. **Dataset Composition**: {total_companies} companies ({treatment_count} treatment, {control_count} control)
+2. **Time Period**: {years[0]} to {years[-1]}
+3. **DiD Result**: {did_result:.2f if did_result != '' else 'Not calculated'}
+4. **Interpretation**: {'Potential earnings manipulation detected' if did_result > 0 else 'No significant evidence found' if did_result != '' else 'Analysis not completed'}
 
 ## Methodology
 
 ### Research Design
-- **Treatment Group**: COVID-affected industries (Aviation, Hospitality, Real Estate)
-- **Control Group**: Less affected industries (IT, FMCG, Pharma)
-- **Pre-Period**: Years before 2020
-- **Post-Period**: Years 2020 and later
-- **Statistical Method**: Difference-in-Differences (DiD) with OLS regression
+- **Treatment Group**: COVID-affected industries
+- **Control Group**: Less affected industries
+- **Statistical Method**: Difference-in-Differences (DiD)
 
 ### Data Description
 - **Total Observations**: {len(df):,}
-- **Companies by Group**: Treatment={treatment_companies}, Control={control_companies}
-- **Years Covered**: {', '.join(map(str, years_covered))}
-- **Industries**: {', '.join(df['industry'].unique()) if 'industry' in df.columns else 'Not specified'}
-
-## Detailed Results
-
-### 1. Descriptive Statistics
-{df[st.session_state.outcome_var].describe().to_string() if st.session_state.analysis_complete else 'Not available'}
-
-### 2. DiD Analysis Results
-**Treatment Effect**: {treatment_effect:.2f if 'treatment_effect' in locals() else 'N/A'}  
-**Control Effect**: {control_effect:.2f if 'control_effect' in locals() else 'N/A'}  
-**DiD Coefficient**: {did_result:.2f if did_result is not None else 'N/A'}
-
-### 3. Statistical Significance
-{'Significant at 5% level' if 'did_pval' in locals() and did_pval < 0.05 else 'Not significant' if 'did_pval' in locals() else 'Not tested'}
-
-## Limitations
-
-1. **Data Quality**: Dependent on uploaded data accuracy
-2. **Model Assumptions**: Parallel trends assumption may not hold
-3. **Sample Size**: Limited to uploaded dataset
-4. **Time Period**: Restricted to available years
+- **Companies by Group**: Treatment={treatment_count}, Control={control_count}
+- **Years Covered**: {', '.join(map(str, years))}
 
 ## Recommendations
 
-1. **Further Analysis**: Extend to more years and companies
-2. **Additional Variables**: Include more financial metrics
-3. **Robustness Checks**: Test alternative specifications
-4. **Industry Analysis**: Conduct sector-specific studies
+1. **Data Verification**: Verify data quality and completeness
+2. **Extended Analysis**: Include more financial metrics
+3. **Robustness Checks**: Test alternative model specifications
+4. **Real-World Validation**: Compare with industry reports
 
 ---
-*Report generated by COVID Earnings Manipulation Analysis Tool*
+*Generated by COVID Earnings Analysis Tool*
 """
     
-    # Display report
     st.markdown(report_content)
     
     # Export options
-    st.subheader("Export Report")
+    st.subheader("Export Options")
     
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        # Export as text
+        # Export report as text
         st.download_button(
-            label="📥 Download as Text",
+            label="📥 Download Report",
             data=report_content,
-            file_name="covid_earnings_report.txt",
-            mime="text/plain"
+            file_name="covid_analysis_report.txt",
+            mime="text/plain",
+            use_container_width=True
         )
     
     with col2:
         # Export data as CSV
-        csv = df.to_csv(index=False)
+        csv_data = df.to_csv(index=False)
         st.download_button(
-            label="📊 Download Data CSV",
-            data=csv,
+            label="📊 Download Data",
+            data=csv_data,
             file_name="analysis_data.csv",
-            mime="text/csv"
+            mime="text/csv",
+            use_container_width=True
         )
     
     with col3:
         # Export summary statistics
-        if st.session_state.analysis_complete:
-            summary_stats = df.describe().T
-            summary_csv = summary_stats.to_csv()
+        if len(df.select_dtypes(include=[np.number]).columns) > 0:
+            summary = df.describe().to_csv()
             st.download_button(
-                label="📈 Download Summary Stats",
-                data=summary_csv,
+                label="📈 Download Summary",
+                data=summary,
                 file_name="summary_statistics.csv",
-                mime="text/csv"
+                mime="text/csv",
+                use_container_width=True
             )
 
-# ============================================================================
-# FOOTER
-# ============================================================================
+# Footer
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; color: #666; padding: 1rem;">
     <p>COVID-Era Earnings Manipulation Analysis Tool | Built with Streamlit</p>
-    <p>For educational and research purposes only | Data from user uploads</p>
-    <p style="font-size: 0.8rem;">© 2024 Financial Analytics Project</p>
+    <p>For educational and research purposes | Data from user uploads</p>
 </div>
 """, unsafe_allow_html=True)
